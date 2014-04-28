@@ -46,6 +46,7 @@ typedef void (^AFURLConnectionProgressiveOperationProgressBlock)(AFDownloadReque
 @property (nonatomic, assign) long long totalBytesReadPerDownload;
 @property (assign) long long offsetContentLength;
 @property (nonatomic, copy) AFURLConnectionProgressiveOperationProgressBlock progressiveDownloadProgress;
+@property (nonatomic, strong) NSError *responseSerializationError;
 @end
 
 @implementation AFDownloadRequestOperation
@@ -183,15 +184,6 @@ typedef void (^AFURLConnectionProgressiveOperationProgressBlock)(AFDownloadReque
     return fileSize;
 }
 
-#pragma mark - AFHTTPRequestOperation
-
-+ (NSIndexSet *)acceptableStatusCodes {
-	NSMutableIndexSet *acceptableStatusCodes = [NSMutableIndexSet indexSetWithIndexesInRange:NSMakeRange(200, 100)];
-	[acceptableStatusCodes addIndex:416];
-	
-	return acceptableStatusCodes;
-}
-
 #pragma mark - AFURLRequestOperation
 
 - (void)pause {
@@ -201,29 +193,36 @@ typedef void (^AFURLConnectionProgressiveOperationProgressBlock)(AFDownloadReque
 
 - (id)responseObject {
     @synchronized(self) {
-        if (!_responseObject && [self isFinished] && !self.error) {
-            NSError *localError = nil;
-            if ([self isCancelled]) {
-                // should we clean up? most likely we don't.
-                if (self.isDeletingTempFileOnCancel) {
-                    [self deleteTempFileWithError:&localError];
+        if (!_responseObject && [self isFinished]) {			
+            NSError *error = nil;
+            if (! [self.responseSerializer validateResponse:self.response data:self.responseData error:&error]) {
+                self.responseSerializationError = error;
+            }
+			
+			if (!self.error) {
+                NSError *localError = nil;
+                if ([self isCancelled]) {
+                    // should we clean up? most likely we don't.
+                    if (self.isDeletingTempFileOnCancel) {
+                        [self deleteTempFileWithError:&localError];
+                        if (localError) {
+                            _fileError = localError;
+                        }
+                    }
+                    
+                    // loss of network connections = error set, but not cancel
+                }else if(!self.error) {
+                    // move file to final position and capture error
+                    NSFileManager *fileManager = [NSFileManager new];
+                    if (self.shouldOverwrite) {
+                        [fileManager removeItemAtPath:_targetPath error:NULL]; // avoid "File exists" error
+                    }
+                    [fileManager moveItemAtPath:[self tempPath] toPath:_targetPath error:&localError];
                     if (localError) {
                         _fileError = localError;
+                    } else {
+                        _responseObject = _targetPath;
                     }
-                }
-                
-                // loss of network connections = error set, but not cancel
-            }else if(!self.error) {
-                // move file to final position and capture error
-                NSFileManager *fileManager = [NSFileManager new];
-                if (self.shouldOverwrite) {
-                    [fileManager removeItemAtPath:_targetPath error:NULL]; // avoid "File exists" error
-                }
-                [fileManager moveItemAtPath:[self tempPath] toPath:_targetPath error:&localError];
-                if (localError) {
-                    _fileError = localError;
-                } else {
-                    _responseObject = _targetPath;
                 }
             }
         }
@@ -233,7 +232,7 @@ typedef void (^AFURLConnectionProgressiveOperationProgressBlock)(AFDownloadReque
 }
 
 - (NSError *)error {
-    return _fileError ?: [super error];
+    return self.responseSerializationError ? : (_fileError ?: [super error]);
 }
 
 #pragma mark - NSURLConnectionDelegate
