@@ -199,7 +199,7 @@ typedef void (^AFURLConnectionProgressiveOperationProgressBlock)(AFDownloadReque
                 self.responseSerializationError = error;
             }
 			
-			if (!self.error) {
+            if (!self.error) {
                 NSError *localError = nil;
                 if ([self isCancelled]) {
                     // should we clean up? most likely we don't.
